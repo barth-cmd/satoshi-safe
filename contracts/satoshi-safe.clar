@@ -488,3 +488,71 @@
     )
   )
 )
+
+;; Liquidate an undercollateralized vault
+(define-public (liquidate (vault-owner principal))
+  (let ((vault-data-option (map-get? vaults { owner: vault-owner })))
+    (begin
+      (assert-not-paused)
+      (asserts! (is-some vault-data-option) ERR_VAULT_NOT_FOUND)
+      
+      (let ((vault-data (unwrap-panic vault-data-option))
+            (updated-vault (update-interest vault-data)))
+        
+        ;; Check if vault is undercollateralized
+        (asserts! (is-undercollateralized updated-vault) ERR_VAULT_NOT_UNDERCOLLATERALIZED)
+        
+        ;; Calculate liquidation values
+        (let ((collateral-value-result (calculate-collateral-value (get collateral-amount updated-vault)))
+              (total-debt (+ (get borrowed-amount updated-vault) 
+                            (get interest-accumulated updated-vault))))
+          (if (is-err collateral-value-result)
+            collateral-value-result
+            (let ((collateral-value (unwrap-panic collateral-value-result))
+                  (liquidation-amount (mul-div total-debt (+ u100 (var-get liquidation-penalty)) u100)))
+              
+              ;; Calculate how much collateral to liquidate
+              (let ((btc-to-liquidate (if (> liquidation-amount collateral-value)
+                                        (get collateral-amount updated-vault) ;; Liquidate all if underwater
+                                        (mul-div (get collateral-amount updated-vault) liquidation-amount collateral-value))))
+                
+                ;; Calculate bonus for liquidator
+                (let ((liquidator-bonus (mul-div btc-to-liquidate (var-get liquidation-penalty) u100)))
+                  
+                  ;; Update vault
+                  (map-set vaults 
+                    { owner: vault-owner }
+                    {
+                      collateral-amount: (- (get collateral-amount updated-vault) btc-to-liquidate),
+                      borrowed-amount: (if (> liquidation-amount total-debt) 
+                                        u0 
+                                        (- (get borrowed-amount updated-vault) 
+                                           (mul-div (get borrowed-amount updated-vault) liquidation-amount total-debt))),
+                      interest-accumulated: (if (> liquidation-amount total-debt)
+                                              u0
+                                              (- (get interest-accumulated updated-vault)
+                                                 (mul-div (get interest-accumulated updated-vault) liquidation-amount total-debt))),
+                      last-interest-update: block-height
+                    }
+                  )
+                  
+                  ;; Update total collateral and borrowed
+                  (var-set total-collateral (- (var-get total-collateral) btc-to-liquidate))
+                  (var-set total-borrowed (if (> liquidation-amount total-debt)
+                                            (- (var-get total-borrowed) (get borrowed-amount updated-vault))
+                                            (- (var-get total-borrowed) 
+                                               (mul-div (get borrowed-amount updated-vault) liquidation-amount total-debt))))
+                  
+                  ;; In production, this would transfer BTC to the liquidator and handle debt repayment
+                  ;; For now, we just track the amounts
+                  
+                  (ok btc-to-liquidate)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
