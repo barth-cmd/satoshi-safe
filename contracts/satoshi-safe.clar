@@ -107,14 +107,14 @@
 
 ;; Check if the protocol is paused
 (define-private (assert-not-paused)
-  (asserts! (not (var-get protocol-paused)) ERR_PROTOCOL_PAUSED)
+  (ok (asserts! (not (var-get protocol-paused)) ERR_PROTOCOL_PAUSED))
 )
 
 ;; Math helper functions
 (define-private (mul-div (a uint) (b uint) (c uint))
   (begin
     (asserts! (> c u0) ERR_INVALID_AMOUNT)
-    (/ (* a b) c)
+    (ok (/ (* a b) c))
   )
 )
 
@@ -123,7 +123,7 @@
   (begin
     (asserts! (is-authorized-oracle) ERR_UNAUTHORIZED)
     (var-set btc-price-in-usd new-price)
-    (var-set btc-price-last-updated block-height)
+    (var-set btc-price-last-updated stacks-block-height)
     (ok new-price)
   )
 )
@@ -132,7 +132,7 @@
   (let ((current-price (var-get btc-price-in-usd))
         (last-updated (var-get btc-price-last-updated)))
     (if (or (is-eq current-price u0) 
-            (> (- block-height last-updated) (var-get oracle-price-validity-period)))
+            (> (- stacks-block-height last-updated) (var-get oracle-price-validity-period)))
       ERR_ORACLE_ERROR
       (ok current-price)
     )
@@ -207,7 +207,7 @@
   (let ((user tx-sender)
         (vault-data (map-get? vaults { owner: user })))
     (begin
-      (assert-not-paused)
+      (try! (assert-not-paused))
       (asserts! (> btc-amount u0) ERR_INVALID_AMOUNT)
       
       ;; In production, this would verify a Bitcoin transaction proof
@@ -232,7 +232,7 @@
             collateral-amount: btc-amount,
             borrowed-amount: u0,
             interest-accumulated: u0,
-            last-interest-update: block-height
+            last-interest-update: stacks-block-height
           }
         )
       )
@@ -250,7 +250,7 @@
   (let ((btc-price (get-btc-price)))
     (if (is-err btc-price)
       btc-price
-      (ok (mul-div btc-amount (unwrap-panic btc-price) u100000000)) ;; Convert satoshis to BTC and multiply by price
+      (mul-div btc-amount (unwrap-panic btc-price) u100000000) ;; Convert satoshis to BTC and multiply by price
     )
   )
 )
@@ -261,7 +261,7 @@
     (if (is-err collateral-value-result)
       collateral-value-result
       (let ((collateral-value (unwrap-panic collateral-value-result)))
-        (ok (mul-div collateral-value u100 (var-get minimum-collateral-ratio)))
+        (mul-div collateral-value u100 (var-get minimum-collateral-ratio))
       )
     )
   )
@@ -269,9 +269,8 @@
 
 ;; Calculate interest for a given period
 (define-private (calculate-interest (borrowed-amount uint) (blocks-passed uint))
-  
   (let ((interest-per-block (/ (var-get borrow-interest-rate) u52560)))
-    (mul-div borrowed-amount interest-per-block blocks-passed)
+    (unwrap-panic (mul-div borrowed-amount interest-per-block blocks-passed))
   )
 )
 
@@ -280,13 +279,13 @@
                                                    (borrowed-amount uint) 
                                                    (interest-accumulated uint) 
                                                    (last-interest-update uint))))
-  (let ((blocks-passed (- block-height (get last-interest-update vault-data)))
+  (let ((blocks-passed (- stacks-block-height (get last-interest-update vault-data)))
         (new-interest (calculate-interest (get borrowed-amount vault-data) blocks-passed)))
     {
       collateral-amount: (get collateral-amount vault-data),
       borrowed-amount: (get borrowed-amount vault-data),
       interest-accumulated: (+ (get interest-accumulated vault-data) new-interest),
-      last-interest-update: block-height
+      last-interest-update: stacks-block-height
     }
   )
 )
@@ -301,8 +300,11 @@
     (if (is-err collateral-value-result)
       true ;; If oracle error, consider vault at risk
       (let ((collateral-value (unwrap-panic collateral-value-result))
-            (min-collateral-needed (mul-div total-debt (var-get liquidation-threshold) u100)))
-        (< collateral-value min-collateral-needed)
+            (min-collateral-needed-result (mul-div total-debt (var-get liquidation-threshold) u100)))
+        (if (is-err min-collateral-needed-result)
+          true ;; If calculation error, consider vault at risk
+          (< collateral-value (unwrap-panic min-collateral-needed-result))
+        )
       )
     )
   )
@@ -313,7 +315,7 @@
   (let ((user tx-sender)
         (vault-data-option (map-get? vaults { owner: user })))
     (begin
-      (assert-not-paused)
+      (try! (assert-not-paused))
       (asserts! (> amount-to-borrow u0) ERR_INVALID_AMOUNT)
       (asserts! (is-some vault-data-option) ERR_VAULT_NOT_FOUND)
       
@@ -336,7 +338,7 @@
                   collateral-amount: (get collateral-amount updated-vault),
                   borrowed-amount: (+ (get borrowed-amount updated-vault) amount-to-borrow),
                   interest-accumulated: (get interest-accumulated updated-vault),
-                  last-interest-update: block-height
+                  last-interest-update: stacks-block-height
                 }
               )
               
@@ -360,7 +362,7 @@
   (let ((user tx-sender)
         (vault-data-option (map-get? vaults { owner: user })))
     (begin
-      (assert-not-paused)
+		(try! (assert-not-paused))
       (asserts! (> amount-to-repay u0) ERR_INVALID_AMOUNT)
       (asserts! (is-some vault-data-option) ERR_VAULT_NOT_FOUND)
       
@@ -395,7 +397,7 @@
                     collateral-amount: (get collateral-amount updated-vault),
                     borrowed-amount: (- (get borrowed-amount updated-vault) principal-payment),
                     interest-accumulated: (- (get interest-accumulated updated-vault) interest-payment),
-                    last-interest-update: block-height
+                    last-interest-update: stacks-block-height
                   }
                 )
                 
@@ -417,7 +419,7 @@
   (let ((user tx-sender)
         (vault-data-option (map-get? vaults { owner: user })))
     (begin
-      (assert-not-paused)
+      (try! (assert-not-paused))
       (asserts! (> amount-to-withdraw u0) ERR_INVALID_AMOUNT)
       (asserts! (is-some vault-data-option) ERR_VAULT_NOT_FOUND)
       
@@ -447,7 +449,7 @@
                       collateral-amount: new-collateral-amount,
                       borrowed-amount: (get borrowed-amount updated-vault),
                       interest-accumulated: (get interest-accumulated updated-vault),
-                      last-interest-update: block-height
+                      last-interest-update: stacks-block-height
                     }
                   )
                   
@@ -470,7 +472,7 @@
                   collateral-amount: new-collateral-amount,
                   borrowed-amount: u0,
                   interest-accumulated: u0,
-                  last-interest-update: block-height
+                  last-interest-update: stacks-block-height
                 }
               )
               
@@ -493,7 +495,7 @@
 (define-public (liquidate (vault-owner principal))
   (let ((vault-data-option (map-get? vaults { owner: vault-owner })))
     (begin
-      (assert-not-paused)
+      (try! (assert-not-paused))
       (asserts! (is-some vault-data-option) ERR_VAULT_NOT_FOUND)
       
       (let ((vault-data (unwrap-panic vault-data-option))
@@ -532,7 +534,7 @@
                                               u0
                                               (- (get interest-accumulated updated-vault)
                                                  (mul-div (get interest-accumulated updated-vault) liquidation-amount total-debt))),
-                      last-interest-update: block-height
+                      last-interest-update: stacks-block-height
                     }
                   )
                   
