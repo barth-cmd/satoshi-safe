@@ -387,7 +387,7 @@
               (let ((fee-amount (mul-div interest-payment (var-get protocol-fee-rate) u100)))
                 
                 ;; Update protocol statistics
-                (var-set total-fees-collected (+ (var-get total-fees-collected) fee-amount))
+                (var-set total-fees-collected (+ (var-get total-fees-collected) (unwrap-panic fee-amount)))
                 (var-set total-borrowed (- (var-get total-borrowed) principal-payment))
                 
                 ;; Update vault
@@ -440,7 +440,7 @@
                 collateral-value-result
                 (let ((new-collateral-value (unwrap-panic collateral-value-result))
                       (min-collateral-needed (mul-div total-debt (var-get minimum-collateral-ratio) u100)))
-                  (asserts! (>= new-collateral-value min-collateral-needed) ERR_MINIMUM_COLLATERAL_RATIO)
+                  (asserts! (>= new-collateral-value (unwrap-panic min-collateral-needed)) ERR_MINIMUM_COLLATERAL_RATIO)
                   
                   ;; Update vault
                   (map-set vaults 
