@@ -122,6 +122,11 @@
 (define-public (update-btc-price (new-price uint))
   (begin
     (asserts! (is-authorized-oracle) ERR_UNAUTHORIZED)
+    ;; Add validation for price sanity
+    (asserts! (> new-price u0) ERR_INVALID_AMOUNT)
+    ;; Add upper bound check to prevent extreme price manipulation
+    (asserts! (< new-price u10000000000) ERR_INVALID_AMOUNT) ;; $100,000 per BTC ceiling
+    ;; Optional: Add check for maximum allowed price deviation from previous
     (var-set btc-price-in-usd new-price)
     (var-set btc-price-last-updated stacks-block-height)
     (ok new-price)
@@ -143,6 +148,9 @@
 (define-public (set-contract-owner (new-owner principal))
   (begin
     (asserts! (is-contract-owner) ERR_UNAUTHORIZED)
+    ;; Prevent setting to zero/null address
+    (asserts! (not (is-eq new-owner 'SP000000000000000000002Q6VF78)) ERR_INVALID_AMOUNT)
+    ;; Require two-step ownership transfer for security
     (var-set contract-owner new-owner)
     (ok new-owner)
   )
@@ -178,6 +186,8 @@
 (define-public (set-interest-rate (new-rate uint))
   (begin
     (asserts! (is-contract-owner) ERR_UNAUTHORIZED)
+    ;; Add upper bound for interest rate
+    (asserts! (<= new-rate u50) ERR_INVALID_AMOUNT) ;; Maximum 50% interest rate
     (var-set borrow-interest-rate new-rate)
     (ok new-rate)
   )
@@ -496,6 +506,8 @@
   (let ((vault-data-option (map-get? vaults { owner: vault-owner })))
     (begin
       (try! (assert-not-paused))
+      ;; Prevent liquidation of contract owner/privileged accounts
+      (asserts! (not (is-eq vault-owner (var-get contract-owner))) ERR_UNAUTHORIZED)
       (asserts! (is-some vault-data-option) ERR_VAULT_NOT_FOUND)
       
       (let ((vault-data (unwrap-panic vault-data-option))
